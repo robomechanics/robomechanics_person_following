@@ -43,6 +43,8 @@
 #include <chrono>
 #include <thread>
 
+#include "controller/dy_controller.h"
+
 #ifdef USE_OPENCV
 using namespace caffe;  // NOLINT(build/namespaces)
 using namespace std;
@@ -51,7 +53,17 @@ using namespace cv;
 #define DETECTION_TRACKING_DISAGREE_TH 0.7
 #define SLEEP_MICROSECONDS 50.0
 #define PERSON_LABEL 15
-#define PERSON_CONFIDENCE_TH 0.5
+#define PERSON_GOOD_CONFIDENCE_TH 0.5
+#define PERSON_EXIST_CONFIDENCE_TH 0.3
+#define STOP_AREA_TH 0.6
+
+// send robot command by dynamism 
+float turnval = 0;
+float speedval = 0;
+int sitval = 0;
+int standval = 0;
+int walkval = 0;
+DyController controller;
 
 class Detector {
  public:
@@ -274,6 +286,7 @@ void DetectionTrackingProcessFrame(Mat & img, const int frame_count, Detector &d
 
   int closest_person_detection_id = -1;
   double max_region = -1;
+  double best_person_confidence = -1;
 
   for (int i = 0; i < detections.size(); ++i) {
     const vector<float>& d = detections[i];
@@ -285,10 +298,15 @@ void DetectionTrackingProcessFrame(Mat & img, const int frame_count, Detector &d
       double this_region = (d[5] * img.cols - d[3] * img.cols) * (d[6] * img.rows - d[4] * img.rows);
 
       // TODO: more clever way to filter out false positives
-      if (static_cast<int>(d[1]) == PERSON_LABEL && this_region > max_region && score > PERSON_CONFIDENCE_TH) {
-        cout << "this person detection score: " << score << endl;
+      if (static_cast<int>(d[1]) == PERSON_LABEL && this_region > max_region && score > PERSON_GOOD_CONFIDENCE_TH) {
+        // cout << "this person detection score: " << score << endl;
         max_region = this_region;
         closest_person_detection_id = i;
+      }
+
+      // Update best person confidence
+      if (static_cast<int>(d[1]) == PERSON_LABEL && score > best_person_confidence) {
+        best_person_confidence = score;
       }
     }
   }
@@ -310,10 +328,10 @@ void DetectionTrackingProcessFrame(Mat & img, const int frame_count, Detector &d
     tracker.Init(img, new_init_box, &regressor);
     new_init_box.crop_against_width_height(img.size().width, img.size().height);
 
-    cout << "new_init_box, x1_:" << new_init_box.x1_ 
-    << ", y1_:" << new_init_box.y1_ 
-    << ", x2_:" << new_init_box.x2_ 
-    << ", y2_:" << new_init_box.y2_ << endl;
+    // cout << "new_init_box, x1_:" << new_init_box.x1_ 
+    // << ", y1_:" << new_init_box.y1_ 
+    // << ", x2_:" << new_init_box.x2_ 
+    // << ", y2_:" << new_init_box.y2_ << endl;
 
     // visualise only the detection
     new_init_box.Draw(0, 255, 0, &img_visualise, 3);
@@ -336,16 +354,62 @@ void DetectionTrackingProcessFrame(Mat & img, const int frame_count, Detector &d
     // if good detection but the tracking box diverges, reinit
     if (DetectionTrackingDisagree(bbox_estimate, detection_bbox) && closest_person_detection_id != -1) {
       // reinitialise the tracker to the detection
-      cout << "Re init tracker at frame: " << frame_count << endl;
+      // cout << "Re init tracker at frame: " << frame_count << endl;
       tracker.Init(img_track, detection_bbox, &regressor);
     }
 
     // visaulise both the detection and tracking result
     detection_bbox.Draw(0, 255, 0, &img_visualise, 3);
     bbox_estimate.Draw(255, 0, 0, &img_visualise, 3);
+
+    // detect people, turn to people
+    // printf("Start sending signal to controller!\n");
+    double image_area = img_track.size().width * img_track.size().height;
+    double bbox_area_fraction = bbox_estimate.compute_area() / image_area;
+    if (bbox_area_fraction > STOP_AREA_TH) {
+      // do not turn or proceed, send stop command
+      int standval_update = 1;
+      int f= controller.SendtoController(turnval, speedval, sitval, standval_update, walkval);
+    }
+    else {
+      // send turn command
+      float turnval_update = (bbox_estimate.x1_ + bbox_estimate.x2_)/float(img.cols)/2.0 - 1/2.0;
+      turnval_update *= 2;
+      int walkval_update = 1;
+      int f= controller.SendtoController(turnval_update, speedval, sitval, standval, walkval_update);
+    }
+  } 
+  else if ((*tracker_initialised) && best_person_confidence > PERSON_EXIST_CONFIDENCE_TH) {
+    // no confident detection but still have some detection and tracker initialised, still do tracking and use tracking result
+    BoundingBox bbox_estimate;
+    tracker.Track(img_track, &regressor, &bbox_estimate); //TODO: check why feeding img here does not work!!! compare img and image_track numerically
+    // visaulise just the tracker result
+    bbox_estimate.Draw(255, 0, 0, &img_visualise, 3);
+
+    // send command using Tracker Result
+    double image_area = img_track.size().width * img_track.size().height;
+    double bbox_area_fraction = bbox_estimate.compute_area() / image_area;
+    if (bbox_area_fraction > STOP_AREA_TH) {
+      // do not turn or proceed, send stop command
+      int standval_update = 1;
+      int f= controller.SendtoController(turnval, speedval, sitval, standval_update, walkval);
+    }
+    else {
+      // send turn command
+      float turnval_update = (bbox_estimate.x1_ + bbox_estimate.x2_)/float(img.cols)/2.0 - 1/2.0;
+      turnval_update *= 6;
+      int walkval_update = 1;
+      int f= controller.SendtoController(turnval_update, speedval, sitval, standval, walkval_update);
+    }
+  }
+  else {
+    // no detection, no tracking
+    // send reset command
+    // printf("No people detected!\n");
+    int standval_update = 1;
+    int f= controller.SendtoController(turnval, speedval, sitval, standval_update, walkval);
   }
 
-  
   cv::imshow("img to feed to tracker:", img_visualise);
   cv::waitKey(1);
 
@@ -363,13 +427,15 @@ void processDetectionTracking(cv::VideoCapture &cap, Detector &detector, Regress
   VideoWriter video_writer;
 
   if (!cap.isOpened()) {
-      LOG(FATAL) << "Failed to open video: " << file;
+      LOG(FATAL) << "Failed to open cap " << endl;
   }
 
   cv::Mat img;
   int frame_count = 0;
 
   bool tracker_initialised = false;
+  
+  controller.DyInit();
 
   while (true) {
     bool success = cap.read(img);
@@ -429,11 +495,11 @@ void processDetectionTrackingFromFile(std::string &image_path, Detector &detecto
 
   while (true) {
     // std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_MICROSECONDS));
-    cout << "Attempt to read from " << image_path << endl;
+    // cout << "Attempt to read from " << image_path << endl;
     img = cv::imread(image_path);
 
-    cout << "img.empty(): " << img.empty() << endl;
-    cout << "img.size(): " << img.size() << endl;
+    // cout << "img.empty(): " << img.empty() << endl;
+    // cout << "img.size(): " << img.size() << endl;
     if(img.empty() || img.size().width == 0 || img.size().height == 0) {
       continue;
     }
@@ -462,6 +528,8 @@ DEFINE_double(confidence_threshold, 0.01,
     "Only store detections with score higher than the threshold.");
 DEFINE_int32(gpu_id, 0,
     "the gpu to run on");
+
+
 
 int main(int argc, char** argv) {
   ::google::InitGoogleLogging(argv[0]);

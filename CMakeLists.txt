@@ -39,6 +39,12 @@ set(GLOG_LIB glog)
 find_package(gflags REQUIRED)
 include_directories(${GFLAGS_INCLUDE_DIR})
 
+# use dynamism to run python script
+set(DY_INCLUDE_DIR /home/robot/proj/dynamism/include)
+set(DY_LIBS /home/robot/proj/dynamism/lib)
+include_directories(${DY_INCLUDE_DIR})
+link_directories(${DY_LIBS})
+
 # add_definitions( "-shared" )
 
 file (GLOB_RECURSE SOURCE_FILES
@@ -57,6 +63,7 @@ file (GLOB_RECURSE SOURCE_FILES
 "src/network/*.h"
 "src/tracker/*.h"
 "src/native/vot.h"
+"src/controller/*.h"
 )
 
 add_library (${PROJECT_NAME} ${SOURCE_FILES})
@@ -77,7 +84,7 @@ include_directories(src/native)
 
 add_executable(ssd_detect src/ssd/detect.cpp)
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} ${Boost_LIBRARIES} ${Caffe_LIBRARIES} ${TinyXML_LIBRARIES} ${GLOG_LIB} ${PROTOBUF_LIBRARIES} ${GFLAGS_LIBRARIES})
-target_link_libraries (ssd_detect ${PROJECT_NAME})
+target_link_libraries (ssd_detect ${PROJECT_NAME} libdynamism.so)
 
 add_executable (test_tracker_alov src/test/test_tracker_alov.cpp)
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} ${Caffe_LIBRARIES} ${GLOG_LIB} ${PROTOBUF_LIBRARIES})

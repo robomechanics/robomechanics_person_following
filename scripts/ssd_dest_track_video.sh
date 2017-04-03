@@ -1,18 +1,18 @@
 #!/bin/bash
 
-if [ -z "$1" ]
-  then
-    echo "No video_list_file supplied!"
-    echo "Usage: bash `basename "$0"` video_list_file output_video_file"
-    exit
-fi
+#if [ -z "$1" ]
+#  then
+#    echo "No video_list_file supplied!"
+#    echo "Usage: bash `basename "$0"` video_list_file output_video_file"
+#    exit
+#fi
 
-if [ -z "$2" ]
-  then
-    echo "No output_video_file supplied!"
-    echo "Usage: bash `basename "$0"` video_list_file output_video_file"
-    exit
-fi
+#if [ -z "$2" ]
+#  then
+#    echo "No output_video_file supplied!"
+#    echo "Usage: bash `basename "$0"` video_list_file output_video_file"
+#    exit
+#fi
 
 # Choose which GPU the tracker runs on
 GPU_ID=0
@@ -33,6 +33,6 @@ WEIGHTS_FILE='/home/sharon/work/ssd/caffe/models/VGGNet/VOC0712/SSD_300x300/VGG_
 
 # Run tracker on test set and save vidoes 
 # build/ssd_detect -file_type=video -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
-build/ssd_detect -file_type=webcam -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
+build/ssd_detect -file_type=webcam -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL video_list.txt webcam.avi
 # build/ssd_detect -file_type=from_file -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
 # build/ssd_detect -file_type=videos_folder -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
