@@ -17,6 +17,7 @@ public:
   BoundingBox();
   BoundingBox(const std::vector<float>& bounding_box);
   BoundingBox(const VOTRegion& region);
+  BoundingBox(double x1, double y1, double x2, double y2);
 
   // Convert bounding box into a vector format.
   void GetVector(std::vector<float>* bounding_box) const;
@@ -28,7 +29,7 @@ public:
   void Print() const;
 
   // Draw a rectangle corresponding to this bbox with the given color.
-  void Draw(const int r, const int g, const int b, cv::Mat* image) const;
+  void Draw(const int r, const int g, const int b, cv::Mat* image, const int thickness = 3) const;
 
   // Draw a white rectangle corresponding to this bbox.
   void DrawBoundingBox(cv::Mat* figure_ptr) const;
@@ -79,8 +80,16 @@ public:
   // Area enclosed by the bounding box.
   double compute_area() const;
 
+    // Area of Union between two bounding boxes
+  double compute_union(const BoundingBox& bbox);
+
+  // Get Intersection over union between two boxes
+  double compute_IOU(const BoundingBox & bbox);
+
   // Area of intersection between two bounding boxes.
   double compute_intersection(const BoundingBox& bbox) const;
+
+  void crop_against_width_height(int W, int H);
 
   // Bounding box coordiantes: top left, bottom right.
   double x1_, y1_, x2_, y2_;

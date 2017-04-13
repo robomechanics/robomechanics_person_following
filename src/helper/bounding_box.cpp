@@ -73,6 +73,13 @@ BoundingBox::BoundingBox(const std::vector<float>& bounding_box)
   }
 }
 
+BoundingBox::BoundingBox(double x1, double y1, double x2, double y2) {
+  x1_ = x1;
+  y1_ = y1;
+  x2_ = x2;
+  y2_ = y2;
+}
+
 void BoundingBox::GetVector(std::vector<float>* bounding_box) const {
   if (use_coordinates_output) {
     // Convert bounding box into a vector format using (x1, y1, x2, y2).
@@ -209,8 +216,9 @@ double BoundingBox::edge_spacing_y() const {
   return std::max(0.0, output_height / 2 - bbox_center_y);
 }
 
-void BoundingBox::Draw(const int r, const int g, const int b,
-                       cv::Mat* image) const {
+void BoundingBox::Draw(const int r, const int g, const int b, 
+                       cv::Mat* image,
+                       const int thickness) const {
   // Get the top-left point.
   const cv::Point point1(x1_, y1_);
 
@@ -221,7 +229,6 @@ void BoundingBox::Draw(const int r, const int g, const int b,
   const cv::Scalar box_color(b, g, r);
 
   // Draw a rectangle corresponding to this bbox with the given color.
-  const int thickness = 3;
   cv::rectangle(*image, point1, point2, box_color, thickness);
 }
 
@@ -347,6 +354,40 @@ double BoundingBox::compute_intersection(const BoundingBox& bbox) const {
   return area;
 }
 
+double BoundingBox::compute_union(const BoundingBox& bbox) {
+  double area = std::max(0.0, std::max(x2_, bbox.x2_) - std::min(x1_, bbox.x1_)) * std::max(0.0, std::max(y2_, bbox.y2_) - std::min(y1_, bbox.y1_));
+  return area;
+}
+
+double BoundingBox::compute_IOU(const BoundingBox & bbox) {
+  double intersection_area = compute_intersection(bbox);
+  double union_area = compute_union(bbox);
+  return (intersection_area / union_area);
+}
+
 double BoundingBox::compute_area() const {
   return get_width() * get_height();
 }
+
+void BoundingBox::crop_against_width_height(int W, int H) {
+  // make sure is inside W, H
+  if (x1_ < 0) {
+      x1_ = 0.0;
+  }
+
+  if (x2_ > W - 1) {
+      x2_ = W -1.0;
+  }
+
+  if (y1_ < 0) {
+      y1_ = 0;
+  }
+
+  if (y2_ > H - 1) {
+      y2_ = H - 1.0;
+  }
+}
+
+
+
+
