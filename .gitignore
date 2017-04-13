@@ -1,0 +1,19 @@
+# Mac
+**/*.DS_Store
+**/*._.DS_Store
+
+# VS Code
+.vscode/
+
+# Input/Ouput
+*.txt
+*.mp4
+*.avi
+
+#build
+build/
+
+# Models/Video Outputs
+nets/models/
+nets/tracker_output/
+
