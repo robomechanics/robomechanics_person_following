@@ -40,13 +40,18 @@
 #include "tracker/tracker.h"
 #include "tracker/tracker_manager.h"
 
+#include <chrono>
+#include <thread>
+
 #ifdef USE_OPENCV
 using namespace caffe;  // NOLINT(build/namespaces)
 using namespace std;
 using namespace cv;
 
 #define DETECTION_TRACKING_DISAGREE_TH 0.7
+#define SLEEP_MICROSECONDS 50.0
 #define PERSON_LABEL 15
+#define PERSON_CONFIDENCE_TH 0.5
 
 class Detector {
  public:
@@ -256,8 +261,105 @@ bool DetectionTrackingDisagree(BoundingBox & tracked_bbox, BoundingBox & detecti
   return false;
 }
 
+void DetectionTrackingProcessFrame(Mat & img, const int frame_count, Detector &detector, Regressor & regressor, Tracker &tracker, VideoWriter &video_writer, 
+                                   const float confidence_threshold,  bool * tracker_initialised, bool save) {
+  CHECK(!img.empty()) << "Error when read frame: " << frame_count;
+  std::vector<vector<float> > detections = detector.Detect(img);
+  // cout << "VideoCap, frame: " << frame_count << ", img.size(): " << img.size() << endl;
+
+  // imshow("img after detection:", img);
+  // waitKey(0);
+
+  Mat img_track = img.clone();
+
+  int closest_person_detection_id = -1;
+  double max_region = -1;
+
+  for (int i = 0; i < detections.size(); ++i) {
+    const vector<float>& d = detections[i];
+    // Detection format: [image_id, label, score, xmin, ymin, xmax, ymax].
+    CHECK_EQ(d.size(), 7);
+    const float score = d[2];
+    if (score >= confidence_threshold) {
+
+      double this_region = (d[5] * img.cols - d[3] * img.cols) * (d[6] * img.rows - d[4] * img.rows);
+
+      // TODO: more clever way to filter out false positives
+      if (static_cast<int>(d[1]) == PERSON_LABEL && this_region > max_region && score > PERSON_CONFIDENCE_TH) {
+        cout << "this person detection score: " << score << endl;
+        max_region = this_region;
+        closest_person_detection_id = i;
+      }
+    }
+  }
+
+  const vector<float> &closest_person_detection = detections[closest_person_detection_id];
+  
+  cv::Mat img_visualise = img.clone();
+
+  // for frame 0, initialise tracker, or when the detection and tracking disagree and at least valid closest_person_detection
+  if (!(*tracker_initialised) && closest_person_detection_id != -1) {
+    // Load the first frame and use the initialization region to initialize the tracker.
+    BoundingBox new_init_box = BoundingBox(closest_person_detection[3] * img.cols, 
+      closest_person_detection[4] * img.rows, 
+      closest_person_detection[5] * img.cols, 
+      closest_person_detection[6] * img.rows);  
+    
+    // imshow("img to feed to tracker:", img);
+    // waitKey(0);
+    tracker.Init(img, new_init_box, &regressor);
+    new_init_box.crop_against_width_height(img.size().width, img.size().height);
+
+    cout << "new_init_box, x1_:" << new_init_box.x1_ 
+    << ", y1_:" << new_init_box.y1_ 
+    << ", x2_:" << new_init_box.x2_ 
+    << ", y2_:" << new_init_box.y2_ << endl;
+
+    // visualise only the detection
+    new_init_box.Draw(0, 255, 0, &img_visualise, 3);
+
+    (*tracker_initialised) = true;
+  }
+  else if ((*tracker_initialised) && closest_person_detection_id != -1) {
+    BoundingBox bbox_estimate;
+
+    // imshow("img to feed to tracker:", img);
+    // waitKey(0);
+    tracker.Track(img_track, &regressor, &bbox_estimate); //TODO: check why feeding img here does not work!!! compare img and image_track numerically
+
+    // check if the bbox_estimate and closest_person_detection differ too much
+    BoundingBox detection_bbox = BoundingBox(closest_person_detection[3] * img.cols, 
+      closest_person_detection[4] * img.rows, 
+      closest_person_detection[5] * img.cols, 
+      closest_person_detection[6] * img.rows); 
+    
+    // if good detection but the tracking box diverges, reinit
+    if (DetectionTrackingDisagree(bbox_estimate, detection_bbox) && closest_person_detection_id != -1) {
+      // reinitialise the tracker to the detection
+      cout << "Re init tracker at frame: " << frame_count << endl;
+      tracker.Init(img_track, detection_bbox, &regressor);
+    }
+
+    // visaulise both the detection and tracking result
+    detection_bbox.Draw(0, 255, 0, &img_visualise, 3);
+    bbox_estimate.Draw(255, 0, 0, &img_visualise, 3);
+  }
+
+  
+  cv::imshow("img to feed to tracker:", img_visualise);
+  cv::waitKey(1);
+
+  if (save) {
+    // save it
+    if (video_writer.isOpened()) {
+      video_writer.write(img_visualise);
+    }
+  }
+}
+
+
 void processDetectionTracking(cv::VideoCapture &cap, Detector &detector, Regressor &regressor, Tracker &tracker, 
-  std::string &file, std::ostream &out, float confidence_threshold, const std::string & out_video_path) {
+  std::string &file, std::ostream &out, float confidence_threshold, const std::string & out_video_path, const bool save = true) {
   VideoWriter video_writer;
 
   if (!cap.isOpened()) {
@@ -267,111 +369,26 @@ void processDetectionTracking(cv::VideoCapture &cap, Detector &detector, Regress
   cv::Mat img;
   int frame_count = 0;
 
+  bool tracker_initialised = false;
+
   while (true) {
     bool success = cap.read(img);
     if (!success) {
       LOG(INFO) << "End of Video Capture" << endl;
       break;
     }
-    CHECK(!img.empty()) << "Error when read frame";
-    std::vector<vector<float> > detections = detector.Detect(img);
-    cout << "VideoCap, frame: " << frame_count << ", img.size(): " << img.size() << endl;
-
-    // imshow("img after detection:", img);
-    // waitKey(0);
-
-    Mat img_track = img.clone();
 
     // initialise the writer
-    if (frame_count == 0) {
-      // Open a video_writer object to save the tracking videos.
-      video_writer.open(out_video_path, CV_FOURCC('M','J','P','G'), 20, img.size());
-    }
-
-    int closest_person_detection_id = -1;
-    double max_region = -1;
-
-    for (int i = 0; i < detections.size(); ++i) {
-      const vector<float>& d = detections[i];
-      // Detection format: [image_id, label, score, xmin, ymin, xmax, ymax].
-      CHECK_EQ(d.size(), 7);
-      const float score = d[2];
-      if (score >= confidence_threshold) {
-        // out << file << "_";
-        // out << std::setfill('0') << std::setw(6) << frame_count << " ";
-        // out << static_cast<int>(d[1]) << " ";
-        // out << score << " ";
-        // out << static_cast<int>(d[3] * img.cols) << " ";
-        // out << static_cast<int>(d[4] * img.rows) << " ";
-        // out << static_cast<int>(d[5] * img.cols) << " ";
-        // out << static_cast<int>(d[6] * img.rows) << std::endl;
-
-        double this_region = (d[5] * img.cols - d[3] * img.cols) * (d[6] * img.rows - d[4] * img.rows);
-
-        // TODO: more clever way to filter out false positives
-        if (static_cast<int>(d[1]) == PERSON_LABEL && this_region > max_region) {
-          max_region = this_region;
-          closest_person_detection_id = i;
-        }
+    if (save) {
+      if (frame_count == 0) {
+        // Open a video_writer object to save the tracking videos.
+        video_writer.open(out_video_path, CV_FOURCC('M','J','P','G'), 20, img.size());
       }
     }
 
-    const vector<float> &closest_person_detection = detections[closest_person_detection_id];
-    
-    cv::Mat img_visualise = img.clone();
-
-    // for frame 0, initialise tracker, or when the detection and tracking disagree and at least valid closest_person_detection
-    if (frame_count == 0 && closest_person_detection_id != -1) {
-      // Load the first frame and use the initialization region to initialize the tracker.
-      BoundingBox new_init_box = BoundingBox(closest_person_detection[3] * img.cols, 
-        closest_person_detection[4] * img.rows, 
-        closest_person_detection[5] * img.cols, 
-        closest_person_detection[6] * img.rows);  
-      
-      // imshow("img to feed to tracker:", img);
-      // waitKey(0);
-      tracker.Init(img, new_init_box, &regressor);
-      new_init_box.crop_against_width_height(img.size().width, img.size().height);
-
-      cout << "new_init_box, x1_:" << new_init_box.x1_ 
-      << ", y1_:" << new_init_box.y1_ 
-      << ", x2_:" << new_init_box.x2_ 
-      << ", y2_:" << new_init_box.y2_ << endl;
-
-      // visualise only the detection
-      new_init_box.Draw(0, 255, 0, &img_visualise, 3);
-    }
-    else {
-      BoundingBox bbox_estimate;
-
-      // imshow("img to feed to tracker:", img);
-      // waitKey(0);
-      tracker.Track(img_track, &regressor, &bbox_estimate); //TODO: check why feeding img here does not work!!! compare img and image_track numerically
-
-      // check if the bbox_estimate and closest_person_detection differ too much
-      BoundingBox detection_bbox = BoundingBox(closest_person_detection[3] * img.cols, 
-        closest_person_detection[4] * img.rows, 
-        closest_person_detection[5] * img.cols, 
-        closest_person_detection[6] * img.rows); 
-      
-      // // if good detection but the tracking box diverges, reinit
-      // if (DetectionTrackingDisagree(bbox_estimate, detection_bbox) && closest_person_detection_id != -1) {
-      //   // reinitialise the tracker to the detection
-      //   cout << "Re init tracker at frame: " << frame_count << endl;
-      //   tracker.Init(img_track, detection_bbox, &regressor);
-      // }
-
-      // visaulise both the detection and tracking result
-      detection_bbox.Draw(0, 255, 0, &img_visualise, 3);
-      bbox_estimate.Draw(255, 0, 0, &img_visualise, 3);
-    }
-
-    
-    cv::imshow("img to feed to tracker:", img_visualise);
-    cv::waitKey(1);
-
-    // save it
-    video_writer.write(img_visualise);
+    // process this current frame
+    DetectionTrackingProcessFrame(img, frame_count, detector, regressor, tracker, video_writer, 
+                                   confidence_threshold, &tracker_initialised, save);
 
     ++frame_count;
   }
@@ -379,106 +396,51 @@ void processDetectionTracking(cv::VideoCapture &cap, Detector &detector, Regress
 }
 
 void processDetectionTrackingOffline(Video &video, Detector &detector, Regressor &regressor, Tracker &tracker, 
-  std::string &file, std::ostream &out, float confidence_threshold, const std::string & out_video_path) {
+  std::string &file, std::ostream &out, float confidence_threshold, const std::string & out_video_path, const bool save = true) {
   VideoWriter video_writer;
 
   cv::Mat img;
   BoundingBox bbox_gt;
   int frame_count = 0;
+  bool tracker_initialised = false;
 
   for (int i =0; i< video.all_frames.size(); i ++) {
     bool has_annotation = video.LoadFrame(i,
                                             false,
                                             false,
                                             &img, &bbox_gt);
-    CHECK(!img.empty()) << "Error when read frame";
-    std::vector<vector<float> > detections = detector.Detect(img);
-    cout << "OfflineVideoFolder, frame: " << frame_count << ", img.size(): " << img.size() << endl;
+    // process this current frame
+    DetectionTrackingProcessFrame(img, frame_count, detector, regressor, tracker, video_writer, 
+                                   confidence_threshold, &tracker_initialised, save);
 
-    // initialise the writer
-    if (frame_count == 0) {
-      // Open a video_writer object to save the tracking videos.
-      video_writer.open(out_video_path, CV_FOURCC('M','J','P','G'), 20, img.size());
+    ++frame_count;
+  }
+
+}
+
+void processDetectionTrackingFromFile(std::string &image_path, Detector &detector, Regressor &regressor, Tracker &tracker, 
+  std::string &file, std::ostream &out, float confidence_threshold, const std::string & out_video_path, const bool save = true) {
+  VideoWriter video_writer;
+
+  cv::Mat img;
+  int frame_count = 0;
+
+  bool tracker_initialised = false;
+
+  while (true) {
+    // std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_MICROSECONDS));
+    cout << "Attempt to read from " << image_path << endl;
+    img = cv::imread(image_path);
+
+    cout << "img.empty(): " << img.empty() << endl;
+    cout << "img.size(): " << img.size() << endl;
+    if(img.empty() || img.size().width == 0 || img.size().height == 0) {
+      continue;
     }
 
-    int closest_person_detection_id = -1;
-    double max_region = -1;
-
-    for (int i = 0; i < detections.size(); ++i) {
-      const vector<float>& d = detections[i];
-      // Detection format: [image_id, label, score, xmin, ymin, xmax, ymax].
-      CHECK_EQ(d.size(), 7);
-      const float score = d[2];
-      if (score >= confidence_threshold) {
-        // out << file << "_";
-        // out << std::setfill('0') << std::setw(6) << frame_count << " ";
-        // out << static_cast<int>(d[1]) << " ";
-        // out << score << " ";
-        // out << static_cast<int>(d[3] * img.cols) << " ";
-        // out << static_cast<int>(d[4] * img.rows) << " ";
-        // out << static_cast<int>(d[5] * img.cols) << " ";
-        // out << static_cast<int>(d[6] * img.rows) << std::endl;
-
-        double this_region = (d[5] * img.cols - d[3] * img.cols) * (d[6] * img.rows - d[4] * img.rows);
-
-        // TODO: also check if the class is person
-        if (static_cast<int>(d[1]) == PERSON_LABEL && this_region > max_region) {
-          max_region = this_region;
-          closest_person_detection_id = i;
-        }
-      }
-    }
-
-    const vector<float> &closest_person_detection = detections[closest_person_detection_id];
-    
-    cv::Mat img_visualise = img.clone();
-
-    // for frame 0, initialise tracker, or when the detection and tracking disagree and at least valid closest_person_detection
-    if (frame_count == 0 && closest_person_detection_id != -1) {
-      // Load the first frame and use the initialization region to initialize the tracker.
-      BoundingBox new_init_box = BoundingBox(closest_person_detection[3] * img.cols, 
-        closest_person_detection[4] * img.rows, 
-        closest_person_detection[5] * img.cols, 
-        closest_person_detection[6] * img.rows);  
-
-      tracker.Init(img, new_init_box, &regressor);
-      new_init_box.crop_against_width_height(img.size().width, img.size().height);
-
-      cout << "new_init_box, x1_:" << new_init_box.x1_ 
-      << ", y1_:" << new_init_box.y1_ 
-      << ", x2_:" << new_init_box.x2_ 
-      << ", y2_:" << new_init_box.y2_ << endl;
-
-      // visualise only the detection
-      new_init_box.Draw(0, 255, 0, &img_visualise, 3);
-    }
-    else {
-      BoundingBox bbox_estimate;
-      tracker.Track(img, &regressor, &bbox_estimate);
-
-      // check if the bbox_estimate and closest_person_detection differ too much
-      BoundingBox detection_bbox = BoundingBox(closest_person_detection[3] * img.cols, 
-        closest_person_detection[4] * img.rows, 
-        closest_person_detection[5] * img.cols, 
-        closest_person_detection[6] * img.rows); 
-
-      // if (DetectionTrackingDisagree(bbox_estimate, detection_bbox)) {
-      //   // reinitialise the tracker to the detection
-      //   cout << "Re init tracker at frame: " << frame_count << endl;
-      //   tracker.Init(img, detection_bbox, &regressor);
-      // }
-
-      // // visaulise both the detection and tracking result
-      // detection_bbox.Draw(0, 255, 0, &img_visualise, 3);
-      bbox_estimate.Draw(255, 0, 0, &img_visualise, 3);
-    }
-
-    
-    // cv::imshow("frame", img_visualise);
-    // cv::waitKey(50);
-
-    // save it
-    video_writer.write(img_visualise);
+    // process this current frame
+    DetectionTrackingProcessFrame(img, frame_count, detector, regressor, tracker, video_writer, 
+                                   confidence_threshold, &tracker_initialised, save);
 
     ++frame_count;
   }
@@ -594,7 +556,7 @@ int main(int argc, char** argv) {
     }
     else if (file_type == "webcam") {
       cv::VideoCapture cap(0); // default webcam id
-      processDetectionTracking(cap, detector, regressor, tracker, file, out, confidence_threshold, out_video_path);
+      processDetectionTracking(cap, detector, regressor, tracker, file, out, confidence_threshold, out_video_path, false);
       // close capture stream
       if (cap.isOpened()) {
         cap.release();
@@ -608,6 +570,10 @@ int main(int argc, char** argv) {
         for (int i = 0; i < videos.size(); i++) {
           processDetectionTrackingOffline(videos[i], detector, regressor, tracker, file, out, confidence_threshold, out_video_path);
         }
+    }
+    else if (file_type == "from_file") {
+      string image_path = "/home/sharon/work/tracker/build/ImageOriginal.bmp";
+      processDetectionTrackingFromFile(image_path, detector, regressor, tracker, file, out, confidence_threshold, out_video_path);
     }
     else {
       LOG(FATAL) << "Unknown file_type: " << file_type;

@@ -32,5 +32,7 @@ WEIGHTS_FILE='/home/sharon/work/ssd/caffe/models/VGGNet/VOC0712/SSD_300x300/VGG_
 # echo "Saving output to " $OUTPUT_FILE
 
 # Run tracker on test set and save vidoes 
-build/ssd_detect -file_type=video -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
+# build/ssd_detect -file_type=video -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
+build/ssd_detect -file_type=webcam -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
+# build/ssd_detect -file_type=from_file -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
 # build/ssd_detect -file_type=videos_folder -gpu_id=$GPU_ID $MODEL_FILE $WEIGHTS_FILE $DEPLOY_PROTO $CAFFE_MODEL $1 $2
