@@ -1,3 +1,35 @@
+Person following based on GOTURN tracker, SSD detector, and dynamism to control Xrhex robot.
+
+
+# To run the demo:
+bash scripts/ssd_dest_track_video.sh
+
+---
+
+# To edit:
+SSD detector that incorporates GOTURN tracker:
+src/ssd/detect.cpp
+
+Dynamsim controller:
+src/controller/dy_controller.h
+
+make
+
+
+---
+
+Note:
+# To use dynamism to run python script, in project CMakeList.txt:
+set(DY_INCLUDE_DIR /home/robot/proj/dynamism/include)
+set(DY_LIBS /home/robot/proj/dynamism/lib)
+include_directories(${DY_INCLUDE_DIR})
+link_directories(${DY_LIBS})
+target_link_libraries (ssd_detect libdynamism.so)
+
+
+---
+
+
 # GOTURN
 
 This is the code for our tracker, GOTURN: Generic Object Tracking Using Regression Networks.
